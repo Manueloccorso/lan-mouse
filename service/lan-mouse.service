@@ -6,6 +6,7 @@ After=graphical-session.target
 BindsTo=graphical-session.target
 
 [Service]
+Environment=LAN_MOUSE_LOG_LEVEL=debug
 ExecStart=/usr/local/bin/lan-mouse daemon
 Restart=on-failure
 

@@ -10,6 +10,7 @@ desktop_file := "it.moccorso.LanMouse.desktop"
 desktop_dir := "/usr/local/share/applications"
 user_service_dir := env("HOME") / ".config/systemd/user"
 release_binary := "target/release/lan-mouse"
+release_folder := "target/release"
 
 default:
     just --list --unsorted
@@ -63,3 +64,27 @@ deploy:
     systemctl --user daemon-reload
     systemctl --user enable --now "{{ service }}"
     systemctl --user restart "{{ service }}"
+
+# Sync the release binary and user service to a target machine over SSH.
+sync-target ssh_target ssh_project_folder:
+    #!/usr/bin/env bash
+    echo "Syncing your custom lan-mouse build to a target machine..."
+    set -euo pipefail
+    echo "Testing that the release binary exists and is executable..."
+    test -x "{{ release_binary }}"
+    echo "Syncing {{ release_binary }} to {{ binary }} on the target machine..."
+    rsync -avz --chmod=755 "{{ release_binary }}" "{{ ssh_target }}:{{ ssh_project_folder }}/{{ release_folder }}/"
+
+sync-targets:
+    #!/usr/bin/env bash
+    echo "Syncing your custom lan-mouse build to multiple target machines..."
+    target="work"
+    ssh_project_folder="/run/media/DATA/personal/dev/fork/lan-mouse"
+    set -euo pipefail
+    echo "Syncing to $target..."
+    just sync-target "$target" "$ssh_project_folder"
+    target="N3536"
+    ssh_project_folder="/home/manuel/personal/dev/forks/lan-mouse"
+    set -euo pipefail
+    echo "Syncing to $target..."
+    just sync-target "$target" "$ssh_project_folder"
