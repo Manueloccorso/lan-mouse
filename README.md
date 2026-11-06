@@ -29,6 +29,27 @@ Focus lies on performance, ease of use and a maintainable implementation that ca
 Lan Mouse encrypts all network traffic using the DTLS implementation provided by [WebRTC.rs](https://github.com/webrtc-rs/webrtc).
 There are currently no mitigations in place for timing side-channel attacks.
 
+## Clipboard sharing
+
+Clipboard sharing is disabled by default. On Wayland, it can be enabled in
+the configuration when [wl-clipboard](https://github.com/bugaevc/wl-clipboard)
+is installed:
+
+```toml
+[clipboard]
+enabled = true
+```
+
+Only UTF-8 plain text is shared, with a 64 KiB limit. Clipboard contents are
+sent only to the client currently being entered: the sending host's clipboard
+is copied to the client on entry, and the client's clipboard is copied back on
+leaving it. The local setting controls both whether a host sends clipboard
+data and whether it applies received data. Clipboard failures do not disable
+mouse or keyboard sharing.
+
+Because clipboard contents may include passwords or other sensitive data,
+enable this feature only on trusted peers.
+
 ## OS Support
 
 Most current desktop environments and operating systems are fully supported, this includes

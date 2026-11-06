@@ -14,6 +14,7 @@ use local_channel::mpsc::{Receiver, Sender, channel};
 use tokio::task::{JoinHandle, spawn_local};
 use tokio_util::sync::CancellationToken;
 
+use crate::clipboard::{ClipboardHandle, ClipboardTransfer, transfer_events};
 use crate::connect::LanMouseConnection;
 
 pub(crate) struct Capture {
@@ -75,6 +76,8 @@ impl Capture {
         backend: Option<input_capture::Backend>,
         conn: LanMouseConnection,
         release_bind: Vec<scancode::Linux>,
+        clipboard: ClipboardHandle,
+        clipboard_enabled: bool,
     ) -> Self {
         let (request_tx, request_rx) = channel();
         let (event_tx, event_rx) = channel();
@@ -89,6 +92,10 @@ impl Capture {
             request_rx,
             release_bind: Rc::new(RefCell::new(release_bind)),
             state: Default::default(),
+            clipboard,
+            clipboard_enabled,
+            clipboard_transfer: Default::default(),
+            next_clipboard_id: 0,
         };
         let task = spawn_local(capture_task.run());
         Self {
@@ -173,6 +180,10 @@ struct CaptureTask {
     release_bind: Rc<RefCell<Vec<scancode::Linux>>>,
     request_rx: Receiver<CaptureRequest>,
     state: State,
+    clipboard: ClipboardHandle,
+    clipboard_enabled: bool,
+    clipboard_transfer: ClipboardTransfer,
+    next_clipboard_id: u32,
 }
 
 impl CaptureTask {
@@ -297,6 +308,20 @@ impl CaptureTask {
                             log::info!("releasing capture: left remote client device region");
                             self.release_capture(capture).await?;
                         },
+                        event @ (ProtoEvent::ClipboardStart { .. }
+                        | ProtoEvent::ClipboardChunk { .. }) => {
+                            if let Some((transfer_id, text)) = self.clipboard_transfer.receive(&event) {
+                                if self.clipboard_enabled {
+                                    if let Err(e) = self.clipboard.write_text(&text).await {
+                                        log::warn!("failed to apply clipboard from client {handle}: {e}");
+                                    }
+                                }
+                                let _ = self.conn.send(
+                                    ProtoEvent::ClipboardAck { transfer_id },
+                                    handle,
+                                ).await;
+                            }
+                        }
                         _ => {}
                     }
                 },
@@ -372,6 +397,7 @@ impl CaptureTask {
         }
 
         let opposite_pos = to_proto_pos(self.get_pos(handle).opposite());
+        let is_begin = event == CaptureEvent::Begin;
 
         let event = match event {
             CaptureEvent::Begin => ProtoEvent::Enter(opposite_pos),
@@ -390,8 +416,32 @@ impl CaptureTask {
             // active_client field would stay stale until the next
             // Begin from a different handle).
             self.release_capture(capture).await?;
+        } else if is_begin {
+            self.send_clipboard(handle).await;
         }
         Ok(())
+    }
+
+    async fn send_clipboard(&mut self, handle: CaptureHandle) {
+        if !self.clipboard_enabled {
+            return;
+        }
+        let text = match self.clipboard.read_text().await {
+            Ok(Some(text)) => text,
+            Ok(None) => return,
+            Err(e) => {
+                log::debug!("could not read clipboard for client {handle}: {e}");
+                return;
+            }
+        };
+        let transfer_id = self.next_clipboard_id;
+        self.next_clipboard_id = self.next_clipboard_id.wrapping_add(1);
+        for event in transfer_events(&text, transfer_id) {
+            if let Err(e) = self.conn.send(event, handle).await {
+                log::debug!("could not send clipboard to client {handle}: {e}");
+                break;
+            }
+        }
     }
 
     async fn release_capture(&mut self, capture: &mut InputCapture) -> Result<(), CaptureError> {
@@ -404,6 +454,7 @@ impl CaptureTask {
             self.event_tx
                 .send(ICaptureEvent::ClientLeft(handle))
                 .expect("channel closed");
+            self.send_clipboard(handle).await;
             // Synthesize key-up events for every key still held in the
             // capture's pressed_keys set BEFORE sending Leave. Without
             // this, pressing the release-bind chord (typically all four

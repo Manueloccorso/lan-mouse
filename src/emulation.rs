@@ -1,3 +1,4 @@
+use crate::clipboard::{ClipboardHandle, ClipboardTransfer};
 use crate::config::local_commit;
 use crate::listen::{LanMouseListener, ListenEvent, ListenerCreationError};
 use futures::StreamExt;
@@ -77,6 +78,8 @@ impl Emulation {
     pub(crate) fn new(
         backend: Option<input_emulation::Backend>,
         listener: LanMouseListener,
+        clipboard: ClipboardHandle,
+        clipboard_enabled: bool,
     ) -> Self {
         let emulation_proxy = EmulationProxy::new(backend);
         let (request_tx, request_rx) = channel();
@@ -86,6 +89,9 @@ impl Emulation {
             emulation_proxy,
             request_rx,
             event_tx,
+            clipboard,
+            clipboard_enabled,
+            clipboard_transfers: Default::default(),
         };
         let task = spawn_local(emulation_task.run());
         Self {
@@ -134,6 +140,9 @@ struct ListenTask {
     emulation_proxy: EmulationProxy,
     request_rx: Receiver<EmulationRequest>,
     event_tx: Sender<EmulationEvent>,
+    clipboard: ClipboardHandle,
+    clipboard_enabled: bool,
+    clipboard_transfers: HashMap<SocketAddr, ClipboardTransfer>,
 }
 
 impl ListenTask {
@@ -158,9 +167,25 @@ impl ListenTask {
                             }
                             ProtoEvent::Leave(_) => {
                                 self.emulation_proxy.remove(addr);
+                                self.clipboard_transfers.remove(&addr);
                                 self.listener.reply(addr, ProtoEvent::Ack(0)).await;
                             }
                             ProtoEvent::Input(event) => self.emulation_proxy.consume(event, addr),
+                            event @ (ProtoEvent::ClipboardStart { .. }
+                            | ProtoEvent::ClipboardChunk { .. }) => {
+                                let transfer = self.clipboard_transfers.entry(addr).or_default();
+                                if let Some((transfer_id, text)) = transfer.receive(&event) {
+                                    if self.clipboard_enabled {
+                                        if let Err(e) = self.clipboard.write_text(&text).await {
+                                            log::warn!("failed to apply clipboard from {addr}: {e}");
+                                        }
+                                    }
+                                    self.listener
+                                        .reply(addr, ProtoEvent::ClipboardAck { transfer_id })
+                                        .await;
+                                }
+                            }
+                            ProtoEvent::ClipboardAck { .. } => {}
                             ProtoEvent::Ping => self.listener.reply(addr, ProtoEvent::Pong(self.emulation_proxy.emulation_active.get())).await,
                             // Peer's version handshake. Echo our own
                             // commit back so the peer's connect-side
