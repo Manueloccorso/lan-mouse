@@ -1,0 +1,13 @@
+[Desktop Entry]
+Categories=Utility;
+Comment[en_US]=Mouse & Keyboard sharing via LAN
+Comment=Mouse & Keyboard sharing via LAN
+Comment[de_DE]=Maus- und Tastaturfreigabe über LAN
+Comment[it_IT]=Condivisione di mouse e tastiera via LAN
+Exec=/usr/local/bin/lan-mouse
+Icon=mo.moccorso.LanMouse
+Name[en_US]=Lan Mouse
+Name=Lan Mouse
+StartupNotify=true
+Terminal=false
+Type=Application
