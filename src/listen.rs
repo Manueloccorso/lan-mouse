@@ -1,5 +1,5 @@
 use futures::{Stream, StreamExt};
-use lan_mouse_proto::{MAX_EVENT_SIZE, ProtoEvent};
+use lan_mouse_proto::{PROTOCOL_EVENT_SIZE, ProtoEvent};
 use local_channel::mpsc::{Receiver, Sender, channel};
 use rustls::pki_types::CertificateDer;
 use std::{
@@ -34,6 +34,7 @@ pub enum ListenerCreationError {
 
 type ArcConn = Arc<dyn Conn + Send + Sync>;
 
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum ListenEvent {
     Msg {
         event: ProtoEvent,
@@ -205,7 +206,7 @@ impl LanMouseListener {
 
     pub(crate) async fn reply(&self, addr: SocketAddr, event: ProtoEvent) {
         log::trace!("reply {event} >=>=>=>=>=> {addr}");
-        let (buf, len): ([u8; MAX_EVENT_SIZE], usize) = event.into();
+        let (buf, len): ([u8; PROTOCOL_EVENT_SIZE], usize) = event.into();
         let conns = self.conns.lock().await;
         for (a, conn) in conns.iter() {
             if *a == addr {
@@ -251,7 +252,7 @@ async fn read_loop(
     conn: ArcConn,
     dtls_tx: Sender<ListenEvent>,
 ) -> Result<(), Error> {
-    let mut b = [0u8; MAX_EVENT_SIZE];
+    let mut b = [0u8; PROTOCOL_EVENT_SIZE];
 
     while conn.recv(&mut b).await.is_ok() {
         match b.try_into() {

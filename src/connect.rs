@@ -1,7 +1,7 @@
 use crate::client::ClientManager;
 use crate::config::local_commit;
 use lan_mouse_ipc::{ClientHandle, DEFAULT_PORT};
-use lan_mouse_proto::{MAX_EVENT_SIZE, ProtoEvent};
+use lan_mouse_proto::{PROTOCOL_EVENT_SIZE, ProtoEvent};
 use local_channel::mpsc::{Receiver, Sender, channel};
 use std::{
     cell::RefCell,
@@ -125,7 +125,7 @@ impl LanMouseConnection {
         event: ProtoEvent,
         handle: ClientHandle,
     ) -> Result<(), LanMouseConnectionError> {
-        let (buf, len): ([u8; MAX_EVENT_SIZE], usize) = event.into();
+        let (buf, len): ([u8; PROTOCOL_EVENT_SIZE], usize) = event.into();
         let buf = &buf[..len];
         if let Some(addr) = self.client_manager.active_addr(handle) {
             let conn = {
@@ -203,7 +203,7 @@ async fn connect_to_handle(
         // mirrors a Hello back so the receive loop can populate
         // `peer_commit`. Old peers will silently skip this event
         // per the forward-compat handler in [`receive_loop`].
-        let (buf, len) = ProtoEvent::Hello {
+        let (buf, len): ([u8; PROTOCOL_EVENT_SIZE], usize) = ProtoEvent::Hello {
             commit: local_commit(),
         }
         .into();
@@ -236,7 +236,7 @@ async fn ping_pong(
     ping_response: Rc<RefCell<HashSet<SocketAddr>>>,
 ) {
     loop {
-        let (buf, len) = ProtoEvent::Ping.into();
+        let (buf, len): ([u8; PROTOCOL_EVENT_SIZE], usize) = ProtoEvent::Ping.into();
 
         // send 4 pings, at least one must be answered
         for _ in 0..4 {
@@ -267,7 +267,7 @@ async fn receive_loop(
     tx: Sender<(ClientHandle, ProtoEvent)>,
     ping_response: Rc<RefCell<HashSet<SocketAddr>>>,
 ) {
-    let mut buf = [0u8; MAX_EVENT_SIZE];
+    let mut buf = [0u8; PROTOCOL_EVENT_SIZE];
     while conn.recv(&mut buf).await.is_ok() {
         match buf.try_into() {
             Ok(event) => {

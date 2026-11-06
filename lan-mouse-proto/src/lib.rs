@@ -7,10 +7,24 @@ use std::{
 };
 use thiserror::Error;
 
-/// defines the maximum size an encoded event can take up
-/// this is currently the pointer motion event
-/// type: u8, time: u32, dx: f64, dy: f64
-pub const MAX_EVENT_SIZE: usize = size_of::<u8>() + size_of::<u32>() + 2 * size_of::<f64>();
+/// Maximum size of a non-clipboard encoded event.
+pub const MAX_INPUT_EVENT_SIZE: usize = size_of::<u8>() + size_of::<u32>() + 2 * size_of::<f64>();
+
+/// Maximum clipboard text transferred in one transition.
+pub const MAX_CLIPBOARD_SIZE: usize = 64 * 1024;
+/// Clipboard chunks stay small enough to avoid IP fragmentation.
+pub const CLIPBOARD_CHUNK_SIZE: usize = 1024;
+/// Maximum serialized clipboard event size.
+pub const CLIPBOARD_EVENT_SIZE: usize =
+    size_of::<u8>() + size_of::<u32>() + size_of::<u16>() + size_of::<u16>() + CLIPBOARD_CHUNK_SIZE;
+/// Maximum size of any encoded protocol event.
+pub const MAX_EVENT_SIZE: usize = if MAX_INPUT_EVENT_SIZE > CLIPBOARD_EVENT_SIZE {
+    MAX_INPUT_EVENT_SIZE
+} else {
+    CLIPBOARD_EVENT_SIZE
+};
+/// Alias describing the size used by protocol receive buffers.
+pub const PROTOCOL_EVENT_SIZE: usize = MAX_EVENT_SIZE;
 
 /// error type for protocol violations
 #[derive(Debug, Error)]
@@ -21,6 +35,9 @@ pub enum ProtocolError {
     /// position type does not exist
     #[error("invalid event id: `{0}`")]
     InvalidPosition(#[from] TryFromPrimitiveError<Position>),
+    /// clipboard chunk contains an invalid length
+    #[error("invalid clipboard chunk length: `{0}`")]
+    InvalidClipboardChunkLength(usize),
 }
 
 /// Position of a client
@@ -47,6 +64,7 @@ impl Display for Position {
 
 /// main lan-mouse protocol event type
 #[derive(Clone, Copy, Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum ProtoEvent {
     /// notify a client that the cursor entered its region at the given position
     /// [`ProtoEvent::Ack`] with the same serial is used for synchronization between devices
@@ -72,6 +90,18 @@ pub enum ProtoEvent {
     /// recognize the event type silently skip it per the
     /// forward-compat handling in the receive loop.
     Hello { commit: [u8; 8] },
+    /// Start of a bounded clipboard transfer.
+    ClipboardStart { transfer_id: u32, total_bytes: u32 },
+    /// A chunk of a clipboard transfer.
+    ClipboardChunk {
+        transfer_id: u32,
+        chunk: u16,
+        total_chunks: u16,
+        len: u16,
+        data: [u8; CLIPBOARD_CHUNK_SIZE],
+    },
+    /// Acknowledge a completed clipboard transfer.
+    ClipboardAck { transfer_id: u32 },
 }
 
 impl Display for ProtoEvent {
@@ -93,6 +123,21 @@ impl Display for ProtoEvent {
                 let s = std::str::from_utf8(commit).unwrap_or("????????");
                 write!(f, "Hello({s})")
             }
+            ProtoEvent::ClipboardStart {
+                transfer_id,
+                total_bytes,
+            } => write!(f, "ClipboardStart({transfer_id}, {total_bytes} bytes)"),
+            ProtoEvent::ClipboardChunk {
+                transfer_id,
+                chunk,
+                total_chunks,
+                len,
+                ..
+            } => write!(
+                f,
+                "ClipboardChunk({transfer_id}, {chunk}/{total_chunks}, {len} bytes)"
+            ),
+            ProtoEvent::ClipboardAck { transfer_id } => write!(f, "ClipboardAck({transfer_id})"),
         }
     }
 }
@@ -112,6 +157,9 @@ pub enum EventType {
     Leave,
     Ack,
     Hello,
+    ClipboardStart,
+    ClipboardChunk,
+    ClipboardAck,
 }
 
 impl ProtoEvent {
@@ -135,14 +183,17 @@ impl ProtoEvent {
             ProtoEvent::Leave(_) => EventType::Leave,
             ProtoEvent::Ack(_) => EventType::Ack,
             ProtoEvent::Hello { .. } => EventType::Hello,
+            ProtoEvent::ClipboardStart { .. } => EventType::ClipboardStart,
+            ProtoEvent::ClipboardChunk { .. } => EventType::ClipboardChunk,
+            ProtoEvent::ClipboardAck { .. } => EventType::ClipboardAck,
         }
     }
 }
 
-impl TryFrom<[u8; MAX_EVENT_SIZE]> for ProtoEvent {
+impl TryFrom<[u8; PROTOCOL_EVENT_SIZE]> for ProtoEvent {
     type Error = ProtocolError;
 
-    fn try_from(buf: [u8; MAX_EVENT_SIZE]) -> Result<Self, Self::Error> {
+    fn try_from(buf: [u8; PROTOCOL_EVENT_SIZE]) -> Result<Self, Self::Error> {
         let mut buf = &buf[..];
         let event_type = decode_u8(&mut buf)?;
         match EventType::try_from(event_type)? {
@@ -196,13 +247,39 @@ impl TryFrom<[u8; MAX_EVENT_SIZE]> for ProtoEvent {
                 }
                 Ok(Self::Hello { commit })
             }
+            EventType::ClipboardStart => Ok(Self::ClipboardStart {
+                transfer_id: decode_u32(&mut buf)?,
+                total_bytes: decode_u32(&mut buf)?,
+            }),
+            EventType::ClipboardChunk => {
+                let transfer_id = decode_u32(&mut buf)?;
+                let chunk = decode_u16(&mut buf)?;
+                let total_chunks = decode_u16(&mut buf)?;
+                let len = decode_u16(&mut buf)?;
+                let len = usize::from(len);
+                if len > CLIPBOARD_CHUNK_SIZE {
+                    return Err(ProtocolError::InvalidClipboardChunkLength(len));
+                }
+                let mut data = [0; CLIPBOARD_CHUNK_SIZE];
+                data[..len].copy_from_slice(&buf[..len]);
+                Ok(Self::ClipboardChunk {
+                    transfer_id,
+                    chunk,
+                    total_chunks,
+                    len: len as u16,
+                    data,
+                })
+            }
+            EventType::ClipboardAck => Ok(Self::ClipboardAck {
+                transfer_id: decode_u32(&mut buf)?,
+            }),
         }
     }
 }
 
-impl From<ProtoEvent> for ([u8; MAX_EVENT_SIZE], usize) {
+impl From<ProtoEvent> for ([u8; PROTOCOL_EVENT_SIZE], usize) {
     fn from(event: ProtoEvent) -> Self {
-        let mut buf = [0u8; MAX_EVENT_SIZE];
+        let mut buf = [0u8; PROTOCOL_EVENT_SIZE];
         let mut len = 0usize;
         {
             let mut buf = &mut buf[..];
@@ -265,6 +342,30 @@ impl From<ProtoEvent> for ([u8; MAX_EVENT_SIZE], usize) {
                         encode_u8(buf, len, *b);
                     }
                 }
+                ProtoEvent::ClipboardStart {
+                    transfer_id,
+                    total_bytes,
+                } => {
+                    encode_u32(buf, len, transfer_id);
+                    encode_u32(buf, len, total_bytes);
+                }
+                ProtoEvent::ClipboardChunk {
+                    transfer_id,
+                    chunk,
+                    total_chunks,
+                    len: data_len,
+                    data,
+                } => {
+                    let data_len = usize::from(data_len).min(CLIPBOARD_CHUNK_SIZE);
+                    encode_u32(buf, len, transfer_id);
+                    encode_u16(buf, len, chunk);
+                    encode_u16(buf, len, total_chunks);
+                    encode_u16(buf, len, data_len as u16);
+                    for byte in &data[..data_len] {
+                        encode_u8(buf, len, *byte);
+                    }
+                }
+                ProtoEvent::ClipboardAck { transfer_id } => encode_u32(buf, len, transfer_id),
             }
         }
         (buf, len)
@@ -285,6 +386,7 @@ macro_rules! decode_impl {
 
 decode_impl!(u8);
 decode_impl!(u32);
+decode_impl!(u16);
 decode_impl!(i32);
 decode_impl!(f64);
 
@@ -305,5 +407,28 @@ macro_rules! encode_impl {
 
 encode_impl!(u8);
 encode_impl!(u32);
+encode_impl!(u16);
 encode_impl!(i32);
 encode_impl!(f64);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clipboard_chunk_round_trip() {
+        let mut data = [0; CLIPBOARD_CHUNK_SIZE];
+        data[..3].copy_from_slice(b"abc");
+        let event = ProtoEvent::ClipboardChunk {
+            transfer_id: 1,
+            chunk: 0,
+            total_chunks: 1,
+            len: 3,
+            data,
+        };
+        let (encoded, len): ([u8; PROTOCOL_EVENT_SIZE], usize) = event.into();
+        assert_eq!(len, 1 + 4 + 2 + 2 + 2 + 3);
+        let decoded = ProtoEvent::try_from(encoded).expect("decode clipboard chunk");
+        assert!(matches!(decoded, ProtoEvent::ClipboardChunk { len: 3, .. }));
+    }
+}

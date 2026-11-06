@@ -6,6 +6,11 @@ release_bind = [ "KeyA", "KeyS", "KeyD", "KeyF" ]
 # optional port (defaults to 4242)
 port = 4242
 
+# clipboard sharing is disabled by default; when enabled, text is shared only
+# with the client currently being entered
+[clipboard]
+enabled = false
+
 # list of authorized tls certificate fingerprints that
 # are accepted for incoming traffic
 [authorized_fingerprints]
