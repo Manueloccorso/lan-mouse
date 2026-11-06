@@ -98,6 +98,14 @@ impl Service {
         let conn = LanMouseConnection::new(cert.clone(), client_manager.clone());
         let clipboard_backend = clipboard::wayland();
         let clipboard_enabled = config.clipboard_enabled();
+        log::info!(
+            "clipboard synchronization is {}",
+            if clipboard_enabled {
+                "enabled"
+            } else {
+                "disabled"
+            }
+        );
 
         // input capture + emulation
         let capture_backend = config.capture_backend().map(|b| b.into());

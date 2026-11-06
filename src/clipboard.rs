@@ -52,7 +52,10 @@ impl Clipboard for WaylandClipboard {
         if !output.status.success() {
             // wl-paste exits unsuccessfully when no clipboard selection is
             // available. This is normal and should not be noisy.
-            log::debug!("wl-paste did not return clipboard text");
+            log::debug!(
+                "wl-paste did not return clipboard text (status: {})",
+                output.status
+            );
             return Ok(None);
         }
 
@@ -60,6 +63,7 @@ impl Clipboard for WaylandClipboard {
         if text.len() > MAX_CLIPBOARD_SIZE {
             return Err(ClipboardError::TooLarge);
         }
+        log::debug!("read {} bytes from the Wayland clipboard", text.len());
         Ok(Some(text))
     }
 
@@ -102,6 +106,7 @@ impl Clipboard for WaylandClipboard {
                 status: status.to_string(),
             });
         }
+        log::debug!("wrote {} bytes to the Wayland clipboard", text.len());
         Ok(())
     }
 }

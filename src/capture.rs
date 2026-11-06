@@ -310,11 +310,20 @@ impl CaptureTask {
                         },
                         event @ (ProtoEvent::ClipboardStart { .. }
                         | ProtoEvent::ClipboardChunk { .. }) => {
+                            log::debug!("received clipboard event from client {handle}: {event}");
                             if let Some((transfer_id, text)) = self.clipboard_transfer.receive(&event) {
+                                log::info!(
+                                    "received clipboard transfer {transfer_id} from client {handle}: {} bytes",
+                                    text.len()
+                                );
                                 if self.clipboard_enabled {
                                     if let Err(e) = self.clipboard.write_text(&text).await {
                                         log::warn!("failed to apply clipboard from client {handle}: {e}");
                                     }
+                                } else {
+                                    log::info!(
+                                        "ignoring clipboard transfer {transfer_id} from client {handle}: clipboard application is disabled"
+                                    );
                                 }
                                 let _ = self.conn.send(
                                     ProtoEvent::ClipboardAck { transfer_id },
@@ -423,22 +432,38 @@ impl CaptureTask {
     }
 
     async fn send_clipboard(&mut self, handle: CaptureHandle) {
+        // Clipboard ownership follows the host that starts the next Enter
+        // transition. The client therefore sends its clipboard when it
+        // enters the server on the way back; release_capture must not send a
+        // second snapshot in the opposite direction.
         if !self.clipboard_enabled {
+            log::debug!("not sending clipboard to client {handle}: clipboard sharing is disabled");
             return;
         }
         let text = match self.clipboard.read_text().await {
             Ok(Some(text)) => text,
-            Ok(None) => return,
+            Ok(None) => {
+                log::debug!("no clipboard text available for client {handle}");
+                return;
+            }
             Err(e) => {
-                log::debug!("could not read clipboard for client {handle}: {e}");
+                log::warn!("could not read clipboard for client {handle}: {e}");
                 return;
             }
         };
         let transfer_id = self.next_clipboard_id;
         self.next_clipboard_id = self.next_clipboard_id.wrapping_add(1);
-        for event in transfer_events(&text, transfer_id) {
+        let events = transfer_events(&text, transfer_id);
+        log::info!(
+            "sending clipboard transfer {transfer_id} to client {handle}: {} bytes, {} events",
+            text.len(),
+            events.len().saturating_sub(1)
+        );
+        for event in events {
             if let Err(e) = self.conn.send(event, handle).await {
-                log::debug!("could not send clipboard to client {handle}: {e}");
+                log::warn!(
+                    "could not send clipboard transfer {transfer_id} to client {handle}: {e}"
+                );
                 break;
             }
         }
@@ -454,7 +479,6 @@ impl CaptureTask {
             self.event_tx
                 .send(ICaptureEvent::ClientLeft(handle))
                 .expect("channel closed");
-            self.send_clipboard(handle).await;
             // Synthesize key-up events for every key still held in the
             // capture's pressed_keys set BEFORE sending Leave. Without
             // this, pressing the release-bind chord (typically all four

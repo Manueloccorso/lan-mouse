@@ -1,4 +1,4 @@
-use crate::clipboard::{ClipboardHandle, ClipboardTransfer};
+use crate::clipboard::{ClipboardHandle, ClipboardTransfer, transfer_events};
 use crate::config::local_commit;
 use crate::listen::{LanMouseListener, ListenEvent, ListenerCreationError};
 use futures::StreamExt;
@@ -92,6 +92,7 @@ impl Emulation {
             clipboard,
             clipboard_enabled,
             clipboard_transfers: Default::default(),
+            next_clipboard_id: 0,
         };
         let task = spawn_local(emulation_task.run());
         Self {
@@ -143,6 +144,7 @@ struct ListenTask {
     clipboard: ClipboardHandle,
     clipboard_enabled: bool,
     clipboard_transfers: HashMap<SocketAddr, ClipboardTransfer>,
+    next_clipboard_id: u32,
 }
 
 impl ListenTask {
@@ -173,12 +175,21 @@ impl ListenTask {
                             ProtoEvent::Input(event) => self.emulation_proxy.consume(event, addr),
                             event @ (ProtoEvent::ClipboardStart { .. }
                             | ProtoEvent::ClipboardChunk { .. }) => {
+                                log::debug!("received clipboard event from {addr}: {event}");
                                 let transfer = self.clipboard_transfers.entry(addr).or_default();
                                 if let Some((transfer_id, text)) = transfer.receive(&event) {
+                                    log::info!(
+                                        "received clipboard transfer {transfer_id} from {addr}: {} bytes",
+                                        text.len()
+                                    );
                                     if self.clipboard_enabled {
                                         if let Err(e) = self.clipboard.write_text(&text).await {
                                             log::warn!("failed to apply clipboard from {addr}: {e}");
                                         }
+                                    } else {
+                                        log::info!(
+                                            "ignoring clipboard transfer {transfer_id} from {addr}: clipboard application is disabled"
+                                        );
                                     }
                                     self.listener
                                         .reply(addr, ProtoEvent::ClipboardAck { transfer_id })
@@ -223,7 +234,10 @@ impl ListenTask {
                     // reenable emulation
                     EmulationRequest::Reenable => self.emulation_proxy.reenable(),
                     // notify the other end that we hit a barrier (should release capture)
-                    EmulationRequest::Release(addr) => self.listener.reply(addr, ProtoEvent::Leave(0)).await,
+                    EmulationRequest::Release(addr) => {
+                        self.send_clipboard(addr).await;
+                        self.listener.reply(addr, ProtoEvent::Leave(0)).await;
+                    }
                     EmulationRequest::ChangePort(port) => {
                         self.listener.request_port_change(port);
                         let result = self.listener.port_changed().await;
@@ -247,6 +261,38 @@ impl ListenTask {
         }
         self.listener.terminate().await;
         self.emulation_proxy.terminate().await;
+    }
+
+    /// Send this host's clipboard when returning control to the peer. The
+    /// return path uses the EnterOnly capture and therefore does not pass
+    /// through the normal outgoing capture task.
+    async fn send_clipboard(&mut self, addr: SocketAddr) {
+        if !self.clipboard_enabled {
+            log::debug!("not sending clipboard to {addr}: clipboard sharing is disabled");
+            return;
+        }
+        let text = match self.clipboard.read_text().await {
+            Ok(Some(text)) => text,
+            Ok(None) => {
+                log::debug!("no clipboard text available for {addr}");
+                return;
+            }
+            Err(e) => {
+                log::warn!("could not read clipboard for {addr}: {e}");
+                return;
+            }
+        };
+        let transfer_id = self.next_clipboard_id;
+        self.next_clipboard_id = self.next_clipboard_id.wrapping_add(1);
+        let events = transfer_events(&text, transfer_id);
+        log::info!(
+            "sending clipboard transfer {transfer_id} to {addr}: {} bytes, {} events",
+            text.len(),
+            events.len().saturating_sub(1)
+        );
+        for event in events {
+            self.listener.reply(addr, event).await;
+        }
     }
 }
 
