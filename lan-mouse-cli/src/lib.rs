@@ -314,7 +314,8 @@ async fn niri_focus(direction: Position) -> Result<(), CliError> {
         niri_request(action).await?;
     } else {
         let (mut rx, mut tx) = connect_async(Some(Duration::from_millis(500))).await?;
-        tx.request(FrontendRequest::TransferToPosition(direction))
+        let output = focused.as_ref().map(|output| output.name.clone());
+        tx.request(FrontendRequest::TransferToPosition(direction, output))
             .await?;
         while let Some(event) = rx.next().await {
             match event? {
@@ -340,10 +341,10 @@ fn directional_neighbor(
     let horizontal_overlap = current.y < oy2 && other.y < cy2;
     let vertical_overlap = current.x < ox2 && other.x < cx2;
     match direction {
-        Position::Left => other.x + other.width as i32 == current.x && horizontal_overlap,
-        Position::Right => other.x == cx2 && horizontal_overlap,
-        Position::Top => other.y + other.height as i32 == current.y && vertical_overlap,
-        Position::Bottom => other.y == cy2 && vertical_overlap,
+        Position::Left => other.x + other.width as i32 <= current.x && horizontal_overlap,
+        Position::Right => other.x >= cx2 && horizontal_overlap,
+        Position::Top => other.y + other.height as i32 <= current.y && vertical_overlap,
+        Position::Bottom => other.y >= cy2 && vertical_overlap,
     }
 }
 
@@ -387,9 +388,9 @@ mod tests {
     }
 
     #[test]
-    fn rejects_gaps_and_corner_only_contacts() {
+    fn accepts_gaps_but_rejects_corner_only_contacts() {
         let current = output(0, 0, 100, 100);
-        assert!(!directional_neighbor(
+        assert!(directional_neighbor(
             &current,
             &output(101, 0, 100, 100),
             Position::Right

@@ -175,12 +175,16 @@ impl InputCapture {
     ///
     /// Backends that can request keyboard/pointer capture programmatically may
     /// override this operation. Other backends keep their normal behavior.
-    pub fn activate(&mut self, id: CaptureHandle) -> Result<(), CaptureError> {
+    pub fn activate(
+        &mut self,
+        id: CaptureHandle,
+        output: Option<&str>,
+    ) -> Result<(), CaptureError> {
         let pos = *self
             .id_map
             .get(&id)
             .expect("no position for capture handle");
-        self.capture.activate(pos)
+        self.capture.activate(pos, output)
     }
 
     /// Drain and return every key the capture has forwarded as
@@ -300,7 +304,7 @@ trait Capture: Stream<Item = Result<(Position, CaptureEvent), CaptureError>> + U
     async fn release(&mut self) -> Result<(), CaptureError>;
 
     /// activate a capture without a physical pointer crossing
-    fn activate(&mut self, _pos: Position) -> Result<(), CaptureError> {
+    fn activate(&mut self, _pos: Position, _output: Option<&str>) -> Result<(), CaptureError> {
         Ok(())
     }
 

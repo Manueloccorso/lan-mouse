@@ -269,7 +269,7 @@ pub enum FrontendRequest {
     /// save config file
     SaveConfiguration,
     /// request a directed input transfer to the active client at a position
-    TransferToPosition(Position),
+    TransferToPosition(Position, Option<String>),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]

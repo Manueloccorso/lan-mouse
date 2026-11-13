@@ -70,7 +70,7 @@ enum CaptureRequest {
     /// set release bind
     SetReleaseBind(Vec<scancode::Linux>),
     /// request a directed transfer to an active client
-    Transfer(CaptureHandle),
+    Transfer(CaptureHandle, Option<String>),
     RegisterIncoming(CaptureHandle, SocketAddr, lan_mouse_ipc::Position),
     UnregisterIncoming(CaptureHandle),
 }
@@ -152,9 +152,9 @@ impl Capture {
         let _ = self.request_tx.send(CaptureRequest::SetReleaseBind(bind));
     }
 
-    pub(crate) fn transfer(&self, handle: CaptureHandle) {
+    pub(crate) fn transfer(&self, handle: CaptureHandle, output: Option<String>) {
         self.request_tx
-            .send(CaptureRequest::Transfer(handle))
+            .send(CaptureRequest::Transfer(handle, output))
             .expect("channel closed");
     }
 
@@ -203,7 +203,7 @@ struct CaptureTask {
     release_bind: Rc<RefCell<Vec<scancode::Linux>>>,
     request_rx: Receiver<CaptureRequest>,
     state: State,
-    pending_transfer: Option<CaptureHandle>,
+    pending_transfer: Option<(CaptureHandle, Option<String>)>,
     direct_transfer_retries: u8,
 }
 
@@ -253,7 +253,9 @@ impl CaptureTask {
                         CaptureRequest::SetReleaseBind(bind) => {
                             self.release_bind.borrow_mut().clone_from(&bind);
                         }
-                        CaptureRequest::Transfer(handle) => self.pending_transfer = Some(handle),
+                        CaptureRequest::Transfer(handle, output) => {
+                            self.pending_transfer = Some((handle, output));
+                        }
                         CaptureRequest::RegisterIncoming(handle, addr, pos) => {
                             self.conn.register_incoming(handle, addr, pos);
                         }
@@ -311,8 +313,9 @@ impl CaptureTask {
         capture: &mut InputCapture,
     ) -> Result<(), InputCaptureError> {
         loop {
-            if let Some(handle) = self.pending_transfer.take() {
-                self.begin_transfer(capture, handle).await?;
+            if let Some((handle, output)) = self.pending_transfer.take() {
+                self.begin_transfer(capture, handle, output.as_deref())
+                    .await?;
             }
             tokio::select! {
                 event = capture.next() => match event {
@@ -367,7 +370,9 @@ impl CaptureTask {
                     CaptureRequest::SetReleaseBind(bind) => {
                         self.release_bind.borrow_mut().clone_from(&bind);
                     }
-                    CaptureRequest::Transfer(handle) => self.begin_transfer(capture, handle).await?,
+                    CaptureRequest::Transfer(handle, output) => {
+                        self.begin_transfer(capture, handle, output.as_deref()).await?
+                    }
                     CaptureRequest::RegisterIncoming(handle, addr, pos) => {
                         self.conn.register_incoming(handle, addr, pos);
                     }
@@ -512,6 +517,7 @@ impl CaptureTask {
         &mut self,
         capture: &mut InputCapture,
         handle: CaptureHandle,
+        output: Option<&str>,
     ) -> Result<(), CaptureError> {
         if self.active_client == Some(handle) {
             return Ok(());
@@ -521,7 +527,7 @@ impl CaptureTask {
         } else {
             capture.release().await?;
         }
-        capture.activate(handle)?;
+        capture.activate(handle, output)?;
         self.active_client = Some(handle);
         let incoming = self.get_type(handle) == CaptureType::EnterOnly;
         self.state = if incoming {

@@ -127,7 +127,7 @@ struct State {
     qh: QueueHandle<Self>,
     pending_events: VecDeque<(Position, CaptureEvent)>,
     outputs: Vec<Output>,
-    forced_windows: Vec<Arc<Window>>,
+    forced_windows: Vec<(String, Arc<Window>)>,
     scroll_discrete_pending: bool,
 }
 
@@ -522,7 +522,7 @@ impl State {
         }
     }
 
-    fn force_grab(&mut self, pos: Position) {
+    fn force_grab(&mut self, pos: Position, output_name: Option<&str>) {
         if self.forced_windows.is_empty() {
             let outputs = self
                 .outputs
@@ -531,16 +531,22 @@ impl State {
                     output
                         .info
                         .as_ref()
-                        .map(|info| (output.wl_output.clone(), info.size))
+                        .map(|info| (info.name.clone(), output.wl_output.clone(), info.size))
                 })
                 .collect::<Vec<_>>();
-            for (output, size) in outputs {
+            for (output_name, output, size) in outputs {
                 let window = Arc::new(Window::new_fullscreen(self, &self.qh, &output, pos, size));
                 self.active_windows.push(window.clone());
-                self.forced_windows.push(window);
+                self.forced_windows.push((output_name, window));
             }
         }
-        let Some(window) = self.forced_windows.first().cloned() else {
+        let Some(window) = self
+            .forced_windows
+            .iter()
+            .find(|(name, _)| output_name.is_none_or(|target| target == name))
+            .or_else(|| self.forced_windows.first())
+            .map(|(_, window)| window.clone())
+        else {
             log::warn!("cannot activate capture at {pos}: no configured output");
             return;
         };
@@ -601,7 +607,7 @@ impl State {
             !self
                 .forced_windows
                 .iter()
-                .any(|forced| Arc::ptr_eq(forced, window))
+                .any(|(_, forced)| Arc::ptr_eq(forced, window))
         });
         self.forced_windows.clear();
     }
@@ -728,9 +734,9 @@ impl Capture for LayerShellInputCapture {
         Ok(inner.flush_events()?)
     }
 
-    fn activate(&mut self, pos: Position) -> Result<(), CaptureError> {
+    fn activate(&mut self, pos: Position, output_name: Option<&str>) -> Result<(), CaptureError> {
         let inner = self.0.get_mut();
-        inner.state.force_grab(pos);
+        inner.state.force_grab(pos, output_name);
         Ok(inner.flush_events()?)
     }
 

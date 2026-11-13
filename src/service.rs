@@ -218,23 +218,25 @@ impl Service {
                 self.update_leave_hook(handle, leave_hook)
             }
             FrontendRequest::SaveConfiguration => self.save_config(),
-            FrontendRequest::TransferToPosition(pos) => self.transfer_to_position(pos),
+            FrontendRequest::TransferToPosition(pos, output) => {
+                self.transfer_to_position(pos, output)
+            }
         }
     }
 
-    fn transfer_to_position(&mut self, pos: Position) {
+    fn transfer_to_position(&mut self, pos: Position, output: Option<String>) {
         if self.capture_status != Status::Enabled {
             self.notify_frontend(FrontendEvent::Error("input capture is disabled".to_owned()));
             return;
         }
         if let Some(handle) = self.client_manager.client_at(pos) {
-            self.capture.transfer(handle);
+            self.capture.transfer(handle, output);
         } else if let Some((handle, _incoming)) = self
             .incoming_conn_info
             .iter()
             .find(|(_, incoming)| incoming.pos == pos)
         {
-            self.capture.transfer(*handle);
+            self.capture.transfer(*handle, output);
         } else {
             self.notify_frontend(FrontendEvent::Error(format!("no active client at {pos}")));
             return;
