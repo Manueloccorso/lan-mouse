@@ -61,6 +61,8 @@ fn run() -> Result<(), LanMouseError> {
                 cli_args,
                 config.seamless_niri_enabled(lan_mouse_ipc::Position::Left),
                 config.seamless_niri_enabled(lan_mouse_ipc::Position::Right),
+                config.seamless_niri_enabled(lan_mouse_ipc::Position::Top),
+                config.seamless_niri_enabled(lan_mouse_ipc::Position::Bottom),
             ))?,
             Command::Daemon => {
                 // if daemon is specified we run the service

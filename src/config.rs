@@ -77,6 +77,8 @@ struct SeamlessNiriToml {
     enabled: Option<bool>,
     left: Option<bool>,
     right: Option<bool>,
+    top: Option<bool>,
+    bottom: Option<bool>,
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug, Eq, PartialEq)]
@@ -513,7 +515,8 @@ impl Config {
             && match pos {
                 Position::Left => config.left.unwrap_or(false),
                 Position::Right => config.right.unwrap_or(false),
-                Position::Top | Position::Bottom => false,
+                Position::Top => config.top.unwrap_or(false),
+                Position::Bottom => config.bottom.unwrap_or(false),
             }
     }
 

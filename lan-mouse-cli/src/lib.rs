@@ -96,14 +96,33 @@ struct NiriCommand {
 enum NiriAction {
     /// focus left or transfer to the left edge
     #[command(name = "focus_left")]
-    FocusLeft,
+    Left,
     /// focus right or transfer to the right edge
     #[command(name = "focus_right")]
-    FocusRight,
+    Right,
+    /// focus up or transfer to the top edge
+    #[command(name = "focus_up")]
+    Up,
+    /// focus down or transfer to the bottom edge
+    #[command(name = "focus_down")]
+    Down,
 }
 
-pub async fn run(args: CliArgs, left_enabled: bool, right_enabled: bool) -> Result<(), CliError> {
-    execute(args.command, left_enabled, right_enabled).await?;
+pub async fn run(
+    args: CliArgs,
+    left_enabled: bool,
+    right_enabled: bool,
+    top_enabled: bool,
+    bottom_enabled: bool,
+) -> Result<(), CliError> {
+    execute(
+        args.command,
+        left_enabled,
+        right_enabled,
+        top_enabled,
+        bottom_enabled,
+    )
+    .await?;
     Ok(())
 }
 
@@ -111,11 +130,15 @@ async fn execute(
     cmd: CliSubcommand,
     left_enabled: bool,
     right_enabled: bool,
+    top_enabled: bool,
+    bottom_enabled: bool,
 ) -> Result<(), CliError> {
     if let CliSubcommand::Niri(NiriCommand { action }) = &cmd {
         let (direction, enabled) = match action {
-            NiriAction::FocusLeft => (Position::Left, left_enabled),
-            NiriAction::FocusRight => (Position::Right, right_enabled),
+            NiriAction::Left => (Position::Left, left_enabled),
+            NiriAction::Right => (Position::Right, right_enabled),
+            NiriAction::Up => (Position::Top, top_enabled),
+            NiriAction::Down => (Position::Bottom, bottom_enabled),
         };
         if !enabled {
             return Err(CliError::SeamlessNiriDisabled);
@@ -274,7 +297,8 @@ async fn seamless_niri_focus(direction: Position) -> Result<(), CliError> {
         let action = match direction {
             Position::Left => serde_json::json!({"Action": {"FocusMonitorLeft": {}}}),
             Position::Right => serde_json::json!({"Action": {"FocusMonitorRight": {}}}),
-            Position::Top | Position::Bottom => unreachable!(),
+            Position::Top => serde_json::json!({"Action": {"FocusMonitorUp": {}}}),
+            Position::Bottom => serde_json::json!({"Action": {"FocusMonitorDown": {}}}),
         };
         niri_request(action).await?;
         return Ok(());
@@ -342,11 +366,13 @@ async fn inject_edge_motion(direction: Position) -> Result<(), CliError> {
     let mut mouse = UinputMouse::new()?;
     log::debug!("waiting for libinput to enumerate temporary uinput mouse");
     tokio::time::sleep(Duration::from_millis(100)).await;
-    mouse.move_relative(match direction {
-        Position::Left => -100_000,
-        Position::Right => 100_000,
-        Position::Top | Position::Bottom => 0,
-    })?;
+    let (x, y) = match direction {
+        Position::Left => (-100_000, 0),
+        Position::Right => (100_000, 0),
+        Position::Top => (0, -100_000),
+        Position::Bottom => (0, 100_000),
+    };
+    mouse.move_relative(x, y)?;
     log::info!("injected virtual mouse motion toward {direction}");
     tokio::time::sleep(Duration::from_millis(100)).await;
     Ok(())
@@ -443,7 +469,7 @@ impl UinputMouse {
         Ok(Self { file })
     }
 
-    fn move_relative(&mut self, x: i32) -> Result<(), CliError> {
+    fn move_relative(&mut self, x: i32, y: i32) -> Result<(), CliError> {
         use std::io::Write;
         #[repr(C)]
         struct InputEvent {
@@ -461,6 +487,15 @@ impl UinputMouse {
                 type_: 0x02,
                 code: 0,
                 value: x,
+            },
+            InputEvent {
+                time: libc::timeval {
+                    tv_sec: 0,
+                    tv_usec: 0,
+                },
+                type_: 0x02,
+                code: 1,
+                value: y,
             },
             InputEvent {
                 time: libc::timeval {
