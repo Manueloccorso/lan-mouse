@@ -10,6 +10,11 @@ port = 4242
 # with the client currently being entered
 [clipboard]
 enabled = false
+# Optional Niri seamless focus transfer. Disabled by default.
+# [seamless_niri]
+# enabled = true
+# left = false
+# right = false
 
 # list of authorized tls certificate fingerprints that
 # are accepted for incoming traffic
