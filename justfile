@@ -3,7 +3,7 @@
 # The deployment recipes assume that the binary is installed at
 # /usr/local/bin/lan-mouse and that the service is managed as a user service.
 
-binary := "/usr/local/bin/lan-mouse"
+binary := "/usr/bin/lan-mouse"
 service := "lan-mouse.service"
 service_file := "service/lan-mouse.service"
 desktop_file := "it.moccorso.LanMouse.desktop"
