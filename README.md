@@ -425,6 +425,38 @@ port = 4242
 
 Where `left` can be either `left`, `right`, `top` or `bottom`.
 
+### Niri focus navigation
+
+Niri focus navigation can optionally transfer focus/input to an active Lan Mouse
+client when there is no local monitor in the requested direction. It is disabled
+by default and is enabled independently on each device:
+
+```toml
+[niri]
+enabled = true
+```
+
+Both devices must enable this option for keyboard navigation in both directions.
+The client at the target edge must already be active; Lan Mouse will not activate
+clients as a side effect of a shortcut. The feature only transfers focus/input,
+not windows or workspaces, and it only operates when the current session exposes
+Niri's `$NIRI_SOCKET`.
+
+Replace the corresponding native Niri monitor-focus bindings with the Lan Mouse
+CLI command, for example:
+
+```kdl
+binds {
+    Mod+Ctrl+H { spawn "lan-mouse" "cli" "niri" "focus" "left"; }
+    Mod+Ctrl+L { spawn "lan-mouse" "cli" "niri" "focus" "right"; }
+    Mod+Ctrl+K { spawn "lan-mouse" "cli" "niri" "focus" "up"; }
+    Mod+Ctrl+J { spawn "lan-mouse" "cli" "niri" "focus" "down"; }
+}
+```
+
+The command preserves native Niri monitor navigation when a local monitor exists
+and falls back to Lan Mouse only at the edge of the local monitor layout.
+
 ## Roadmap
 - [x] Graphical frontend (gtk + libadwaita)
 - [x] respect xdg-config-home for config file location.

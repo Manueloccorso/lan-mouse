@@ -308,6 +308,7 @@ fn build_ui(app: &Application) {
                     FrontendEvent::ConnectionAttempt { fingerprint } => {
                         window.request_authorization(&fingerprint);
                     }
+                    FrontendEvent::TransferStarted(_) => {}
                     FrontendEvent::DeviceConnected {
                         fingerprint: _,
                         addr,

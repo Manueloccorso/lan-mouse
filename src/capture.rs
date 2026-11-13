@@ -68,6 +68,8 @@ enum CaptureRequest {
     Reenable,
     /// set release bind
     SetReleaseBind(Vec<scancode::Linux>),
+    /// request a directed transfer to an active client
+    Transfer(CaptureHandle),
 }
 
 impl Capture {
@@ -89,6 +91,8 @@ impl Capture {
             request_rx,
             release_bind: Rc::new(RefCell::new(release_bind)),
             state: Default::default(),
+            pending_transfer: None,
+            direct_transfer_retries: 0,
         };
         let task = spawn_local(capture_task.run());
         Self {
@@ -144,6 +148,12 @@ impl Capture {
     pub(crate) fn set_release_bind(&mut self, bind: Vec<scancode::Linux>) {
         let _ = self.request_tx.send(CaptureRequest::SetReleaseBind(bind));
     }
+
+    pub(crate) fn transfer(&self, handle: CaptureHandle) {
+        self.request_tx
+            .send(CaptureRequest::Transfer(handle))
+            .expect("channel closed");
+    }
 }
 
 /// debounce a statement `$st`, i.e. the statement is executed only if the
@@ -173,6 +183,8 @@ struct CaptureTask {
     release_bind: Rc<RefCell<Vec<scancode::Linux>>>,
     request_rx: Receiver<CaptureRequest>,
     state: State,
+    pending_transfer: Option<CaptureHandle>,
+    direct_transfer_retries: u8,
 }
 
 impl CaptureTask {
@@ -221,6 +233,7 @@ impl CaptureTask {
                         CaptureRequest::SetReleaseBind(bind) => {
                             self.release_bind.borrow_mut().clone_from(&bind);
                         }
+                        CaptureRequest::Transfer(handle) => self.pending_transfer = Some(handle),
                     },
                     _ = self.cancellation_token.cancelled() => return,
                 }
@@ -272,6 +285,9 @@ impl CaptureTask {
         capture: &mut InputCapture,
     ) -> Result<(), InputCaptureError> {
         loop {
+            if let Some(handle) = self.pending_transfer.take() {
+                self.begin_transfer(capture, handle).await?;
+            }
             tokio::select! {
                 event = capture.next() => match event {
                     Some(event) => self.handle_capture_event(capture, event?).await?,
@@ -291,6 +307,7 @@ impl CaptureTask {
                         ProtoEvent::Ack(_) => {
                             log::info!("client {handle} acknowledged the connection!");
                             self.state = State::Sending;
+                            self.direct_transfer_retries = 0;
                         }
                         // client disconnected
                         ProtoEvent::Leave(_) => {
@@ -323,6 +340,17 @@ impl CaptureTask {
                     }
                     CaptureRequest::SetReleaseBind(bind) => {
                         self.release_bind.borrow_mut().clone_from(&bind);
+                    }
+                    CaptureRequest::Transfer(handle) => self.begin_transfer(capture, handle).await?,
+                },
+                _ = tokio::time::sleep(Duration::from_millis(100)), if self.active_client.is_some() && self.state == State::WaitingForAck && self.direct_transfer_retries > 0 => {
+                    if let Some(handle) = self.active_client {
+                        self.send_enter(handle).await;
+                        self.direct_transfer_retries = self.direct_transfer_retries.saturating_sub(1);
+                        if self.direct_transfer_retries == 0 {
+                            log::warn!("directed transfer to client {handle} timed out");
+                            self.release_capture(capture).await?;
+                        }
                     }
                 },
                 _ = self.cancellation_token.cancelled() => break,
@@ -397,6 +425,7 @@ impl CaptureTask {
     async fn release_capture(&mut self, capture: &mut InputCapture) -> Result<(), CaptureError> {
         // If we have an active client, notify them we're leaving
         if let Some(handle) = self.active_client.take() {
+            self.direct_transfer_retries = 0;
             // Surface the leave to the service layer so it can fire
             // the per-client leave_hook. Sent before the network
             // teardown below so we never race against the peer
@@ -445,6 +474,48 @@ impl CaptureTask {
             }
         }
         capture.release().await
+    }
+
+    async fn begin_transfer(
+        &mut self,
+        capture: &mut InputCapture,
+        handle: CaptureHandle,
+    ) -> Result<(), CaptureError> {
+        if self.active_client == Some(handle) {
+            return Ok(());
+        }
+        if self.active_client.is_some() {
+            self.release_capture(capture).await?;
+        } else {
+            capture.release().await?;
+        }
+        self.active_client = Some(handle);
+        self.state = State::WaitingForAck;
+        self.direct_transfer_retries = 50;
+        self.event_tx
+            .send(ICaptureEvent::ClientEntered(handle))
+            .expect("channel closed");
+        self.send_enter(handle).await;
+        Ok(())
+    }
+
+    async fn send_enter(&self, handle: CaptureHandle) {
+        let Some(pos) = self
+            .captures
+            .iter()
+            .find(|(h, ..)| *h == handle)
+            .map(|(_, p, _)| *p)
+        else {
+            log::warn!("cannot transfer to unknown capture handle {handle}");
+            return;
+        };
+        if let Err(e) = self
+            .conn
+            .send(ProtoEvent::Enter(to_proto_pos(pos.opposite())), handle)
+            .await
+        {
+            log::debug!("directed transfer to client {handle} is pending: {e}");
+        }
     }
 }
 

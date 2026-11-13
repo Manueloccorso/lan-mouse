@@ -218,7 +218,21 @@ impl Service {
                 self.update_leave_hook(handle, leave_hook)
             }
             FrontendRequest::SaveConfiguration => self.save_config(),
+            FrontendRequest::TransferToPosition(pos) => self.transfer_to_position(pos),
         }
+    }
+
+    fn transfer_to_position(&mut self, pos: Position) {
+        let Some(handle) = self.client_manager.client_at(pos) else {
+            self.notify_frontend(FrontendEvent::Error(format!("no active client at {pos}")));
+            return;
+        };
+        if self.capture_status != Status::Enabled {
+            self.notify_frontend(FrontendEvent::Error("input capture is disabled".to_owned()));
+            return;
+        }
+        self.capture.transfer(handle);
+        self.notify_frontend(FrontendEvent::TransferStarted(pos));
     }
 
     fn save_config(&mut self) {

@@ -69,6 +69,12 @@ struct ConfigToml {
     cert_path: Option<PathBuf>,
     clients: Option<Vec<TomlClient>>,
     authorized_fingerprints: Option<HashMap<String, String>>,
+    niri: Option<NiriToml>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+struct NiriToml {
+    enabled: Option<bool>,
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug, Eq, PartialEq)]
@@ -490,6 +496,15 @@ impl Config {
             .flatten()
             .map(From::<TomlClient>::from)
             .collect()
+    }
+
+    /// whether the local Niri shortcut integration is enabled
+    pub fn niri_enabled(&self) -> bool {
+        self.config_toml
+            .as_ref()
+            .and_then(|c| c.niri.as_ref())
+            .and_then(|n| n.enabled)
+            .unwrap_or(false)
     }
 
     /// release bind for returning control to the host
