@@ -15,6 +15,8 @@ enabled = false
 # enabled = true
 # left = false
 # right = false
+# top = false
+# bottom = false
 
 # list of authorized tls certificate fingerprints that
 # are accepted for incoming traffic

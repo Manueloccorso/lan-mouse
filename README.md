@@ -456,6 +456,8 @@ with:
 enabled = true
 left = true
 right = false
+top = false
+bottom = false
 ```
 
 Replace the corresponding Niri bindings:
@@ -464,6 +466,8 @@ Replace the corresponding Niri bindings:
 binds {
     Mod+Ctrl+H { spawn "lan-mouse" "cli" "niri" "focus_left"; }
     Mod+Ctrl+L { spawn "lan-mouse" "cli" "niri" "focus_right"; }
+    Mod+Ctrl+K { spawn "lan-mouse" "cli" "niri" "focus_up"; }
+    Mod+Ctrl+J { spawn "lan-mouse" "cli" "niri" "focus_down"; }
 }
 ```
 
