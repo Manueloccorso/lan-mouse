@@ -69,6 +69,14 @@ struct ConfigToml {
     cert_path: Option<PathBuf>,
     clients: Option<Vec<TomlClient>>,
     authorized_fingerprints: Option<HashMap<String, String>>,
+    seamless_niri: Option<SeamlessNiriToml>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+struct SeamlessNiriToml {
+    enabled: Option<bool>,
+    left: Option<bool>,
+    right: Option<bool>,
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug, Eq, PartialEq)]
@@ -490,6 +498,23 @@ impl Config {
             .flatten()
             .map(From::<TomlClient>::from)
             .collect()
+    }
+
+    /// whether seamless Niri transfer is enabled for a local edge
+    pub fn seamless_niri_enabled(&self, pos: Position) -> bool {
+        let Some(config) = self
+            .config_toml
+            .as_ref()
+            .and_then(|c| c.seamless_niri.as_ref())
+        else {
+            return false;
+        };
+        config.enabled.unwrap_or(false)
+            && match pos {
+                Position::Left => config.left.unwrap_or(false),
+                Position::Right => config.right.unwrap_or(false),
+                Position::Top | Position::Bottom => false,
+            }
     }
 
     /// release bind for returning control to the host

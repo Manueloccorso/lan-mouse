@@ -425,6 +425,32 @@ port = 4242
 
 Where `left` can be either `left`, `right`, `top` or `bottom`.
 
+### Seamless Niri focus
+
+Seamless Niri focus is disabled by default. Configure the local transfer edges
+with:
+
+```toml
+[seamless_niri]
+enabled = true
+left = true
+right = false
+```
+
+Replace the corresponding Niri bindings:
+
+```kdl
+binds {
+    Mod+Ctrl+H { spawn "lan-mouse" "cli" "niri" "focus_left"; }
+    Mod+Ctrl+L { spawn "lan-mouse" "cli" "niri" "focus_right"; }
+}
+```
+
+If a local monitor exists in the requested direction, the command uses Niri's
+native monitor-focus action. Otherwise, when the configured edge is enabled, it
+injects a temporary Linux `uinput` mouse movement so the normal Lan Mouse edge
+capture handles the transfer. Access to `/dev/uinput` is required.
+
 ## Roadmap
 - [x] Graphical frontend (gtk + libadwaita)
 - [x] respect xdg-config-home for config file location.

@@ -57,7 +57,11 @@ fn run() -> Result<(), LanMouseError> {
         Some(command) => match command {
             Command::TestEmulation(args) => run_async(emulation_test::run(config, args))?,
             Command::TestCapture(args) => run_async(capture_test::run(config, args))?,
-            Command::Cli(cli_args) => run_async(lan_mouse_cli::run(cli_args))?,
+            Command::Cli(cli_args) => run_async(lan_mouse_cli::run(
+                cli_args,
+                config.seamless_niri_enabled(lan_mouse_ipc::Position::Left),
+                config.seamless_niri_enabled(lan_mouse_ipc::Position::Right),
+            ))?,
             Command::Daemon => {
                 // if daemon is specified we run the service
                 match run_async(run_service(config)) {
