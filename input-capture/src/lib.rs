@@ -171,6 +171,18 @@ impl InputCapture {
         self.capture.release().await
     }
 
+    /// Activate a capture without waiting for a physical pointer crossing.
+    ///
+    /// Backends that can request keyboard/pointer capture programmatically may
+    /// override this operation. Other backends keep their normal behavior.
+    pub fn activate(&mut self, id: CaptureHandle) -> Result<(), CaptureError> {
+        let pos = *self
+            .id_map
+            .get(&id)
+            .expect("no position for capture handle");
+        self.capture.activate(pos)
+    }
+
     /// Drain and return every key the capture has forwarded as
     /// down-but-not-up. The caller is expected to synthesize key-up
     /// events to the remote peer for each — otherwise the peer
@@ -286,6 +298,11 @@ trait Capture: Stream<Item = Result<(Position, CaptureEvent), CaptureError>> + U
 
     /// release mouse
     async fn release(&mut self) -> Result<(), CaptureError>;
+
+    /// activate a capture without a physical pointer crossing
+    fn activate(&mut self, _pos: Position) -> Result<(), CaptureError> {
+        Ok(())
+    }
 
     /// destroy the input capture
     async fn terminate(&mut self) -> Result<(), CaptureError>;

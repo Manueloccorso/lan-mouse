@@ -437,10 +437,11 @@ enabled = true
 ```
 
 Both devices must enable this option for keyboard navigation in both directions.
-The client at the target edge must already be active; Lan Mouse will not activate
-clients as a side effect of a shortcut. The feature only transfers focus/input,
-not windows or workspaces, and it only operates when the current session exposes
-Niri's `$NIRI_SOCKET`.
+Transfers use an already-active configured client, or an already-connected peer
+discovered from the incoming Lan Mouse connection; Lan Mouse will not establish
+or activate a new peer as a side effect of a shortcut. The feature only transfers
+focus/input, not windows or workspaces, and it only operates when the current
+session exposes Niri's `$NIRI_SOCKET`.
 
 Replace the corresponding native Niri monitor-focus bindings with the Lan Mouse
 CLI command, for example:

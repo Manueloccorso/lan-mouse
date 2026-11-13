@@ -1,5 +1,6 @@
 use std::{
     cell::{Cell, RefCell},
+    net::SocketAddr,
     rc::Rc,
     time::{Duration, Instant},
 };
@@ -70,6 +71,8 @@ enum CaptureRequest {
     SetReleaseBind(Vec<scancode::Linux>),
     /// request a directed transfer to an active client
     Transfer(CaptureHandle),
+    RegisterIncoming(CaptureHandle, SocketAddr, lan_mouse_ipc::Position),
+    UnregisterIncoming(CaptureHandle),
 }
 
 impl Capture {
@@ -154,6 +157,23 @@ impl Capture {
             .send(CaptureRequest::Transfer(handle))
             .expect("channel closed");
     }
+
+    pub(crate) fn register_incoming(
+        &self,
+        handle: CaptureHandle,
+        addr: SocketAddr,
+        pos: lan_mouse_ipc::Position,
+    ) {
+        self.request_tx
+            .send(CaptureRequest::RegisterIncoming(handle, addr, pos))
+            .expect("channel closed");
+    }
+
+    pub(crate) fn unregister_incoming(&self, handle: CaptureHandle) {
+        self.request_tx
+            .send(CaptureRequest::UnregisterIncoming(handle))
+            .expect("channel closed");
+    }
 }
 
 /// debounce a statement `$st`, i.e. the statement is executed only if the
@@ -234,6 +254,12 @@ impl CaptureTask {
                             self.release_bind.borrow_mut().clone_from(&bind);
                         }
                         CaptureRequest::Transfer(handle) => self.pending_transfer = Some(handle),
+                        CaptureRequest::RegisterIncoming(handle, addr, pos) => {
+                            self.conn.register_incoming(handle, addr, pos);
+                        }
+                        CaptureRequest::UnregisterIncoming(handle) => {
+                            self.conn.unregister_incoming(handle);
+                        }
                     },
                     _ = self.cancellation_token.cancelled() => return,
                 }
@@ -342,6 +368,12 @@ impl CaptureTask {
                         self.release_bind.borrow_mut().clone_from(&bind);
                     }
                     CaptureRequest::Transfer(handle) => self.begin_transfer(capture, handle).await?,
+                    CaptureRequest::RegisterIncoming(handle, addr, pos) => {
+                        self.conn.register_incoming(handle, addr, pos);
+                    }
+                    CaptureRequest::UnregisterIncoming(handle) => {
+                        self.conn.unregister_incoming(handle);
+                    }
                 },
                 _ = tokio::time::sleep(Duration::from_millis(100)), if self.active_client.is_some() && self.state == State::WaitingForAck && self.direct_transfer_retries > 0 => {
                     if let Some(handle) = self.active_client {
@@ -379,7 +411,7 @@ impl CaptureTask {
         }
 
         // enter only capture (for incoming connections)
-        if self.get_type(handle) == CaptureType::EnterOnly {
+        if self.get_type(handle) == CaptureType::EnterOnly && self.active_client != Some(handle) {
             // if there is no active outgoing connection at the current capture,
             // we release the capture
             if !self.is_default_capture_at(self.get_pos(handle)) {
@@ -489,12 +521,20 @@ impl CaptureTask {
         } else {
             capture.release().await?;
         }
+        capture.activate(handle)?;
         self.active_client = Some(handle);
-        self.state = State::WaitingForAck;
-        self.direct_transfer_retries = 50;
-        self.event_tx
-            .send(ICaptureEvent::ClientEntered(handle))
-            .expect("channel closed");
+        let incoming = self.get_type(handle) == CaptureType::EnterOnly;
+        self.state = if incoming {
+            State::Sending
+        } else {
+            State::WaitingForAck
+        };
+        self.direct_transfer_retries = if incoming { 0 } else { 50 };
+        if !incoming {
+            self.event_tx
+                .send(ICaptureEvent::ClientEntered(handle))
+                .expect("channel closed");
+        }
         self.send_enter(handle).await;
         Ok(())
     }

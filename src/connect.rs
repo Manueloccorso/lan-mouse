@@ -1,5 +1,6 @@
 use crate::client::ClientManager;
 use crate::config::local_commit;
+use crate::listen::LanMouseListenerSender;
 use lan_mouse_ipc::{ClientHandle, DEFAULT_PORT};
 use lan_mouse_proto::{MAX_EVENT_SIZE, ProtoEvent};
 use local_channel::mpsc::{Receiver, Sender, channel};
@@ -100,10 +101,16 @@ pub(crate) struct LanMouseConnection {
     recv_rx: Receiver<(ClientHandle, ProtoEvent)>,
     recv_tx: Sender<(ClientHandle, ProtoEvent)>,
     ping_response: Rc<RefCell<HashSet<SocketAddr>>>,
+    incoming: Rc<RefCell<HashMap<ClientHandle, (SocketAddr, lan_mouse_ipc::Position)>>>,
+    listener: LanMouseListenerSender,
 }
 
 impl LanMouseConnection {
-    pub(crate) fn new(cert: Certificate, client_manager: ClientManager) -> Self {
+    pub(crate) fn new(
+        cert: Certificate,
+        client_manager: ClientManager,
+        listener: LanMouseListenerSender,
+    ) -> Self {
         let (recv_tx, recv_rx) = channel();
         Self {
             cert,
@@ -113,11 +120,26 @@ impl LanMouseConnection {
             recv_rx,
             recv_tx,
             ping_response: Default::default(),
+            incoming: Default::default(),
+            listener,
         }
     }
 
     pub(crate) async fn recv(&mut self) -> (ClientHandle, ProtoEvent) {
         self.recv_rx.recv().await.expect("channel closed")
+    }
+
+    pub(crate) fn register_incoming(
+        &self,
+        handle: ClientHandle,
+        addr: SocketAddr,
+        pos: lan_mouse_ipc::Position,
+    ) {
+        self.incoming.borrow_mut().insert(handle, (addr, pos));
+    }
+
+    pub(crate) fn unregister_incoming(&self, handle: ClientHandle) {
+        self.incoming.borrow_mut().remove(&handle);
     }
 
     pub(crate) async fn send(
@@ -127,6 +149,11 @@ impl LanMouseConnection {
     ) -> Result<(), LanMouseConnectionError> {
         let (buf, len): ([u8; MAX_EVENT_SIZE], usize) = event.into();
         let buf = &buf[..len];
+        let incoming_addr = { self.incoming.borrow().get(&handle).map(|(addr, _)| *addr) };
+        if let Some(addr) = incoming_addr {
+            self.listener.send(addr, event).await;
+            return Ok(());
+        }
         if let Some(addr) = self.client_manager.active_addr(handle) {
             let conn = {
                 let conns = self.conns.lock().await;

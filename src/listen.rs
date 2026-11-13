@@ -57,6 +57,11 @@ pub(crate) struct LanMouseListener {
     port_changed: Receiver<Result<u16, ListenerCreationError>>,
 }
 
+#[derive(Clone)]
+pub(crate) struct LanMouseListenerSender {
+    conns: Rc<AsyncMutex<Vec<(SocketAddr, ArcConn)>>>,
+}
+
 type VerifyPeerCertificateFn = Arc<
     dyn (Fn(&[Vec<u8>], &[CertificateDer<'static>]) -> Result<(), webrtc_dtls::Error>)
         + Send
@@ -204,6 +209,22 @@ impl LanMouseListener {
     }
 
     pub(crate) async fn reply(&self, addr: SocketAddr, event: ProtoEvent) {
+        self.sender().send(addr, event).await;
+    }
+
+    pub(crate) fn sender(&self) -> LanMouseListenerSender {
+        LanMouseListenerSender {
+            conns: self.conns.clone(),
+        }
+    }
+
+    pub(crate) async fn get_certificate_fingerprint(&self, addr: SocketAddr) -> Option<String> {
+        self.sender().get_certificate_fingerprint(addr).await
+    }
+}
+
+impl LanMouseListenerSender {
+    pub(crate) async fn send(&self, addr: SocketAddr, event: ProtoEvent) {
         log::trace!("reply {event} >=>=>=>=>=> {addr}");
         let (buf, len): ([u8; MAX_EVENT_SIZE], usize) = event.into();
         let conns = self.conns.lock().await;

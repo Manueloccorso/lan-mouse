@@ -127,6 +127,7 @@ struct State {
     qh: QueueHandle<Self>,
     pending_events: VecDeque<(Position, CaptureEvent)>,
     outputs: Vec<Output>,
+    forced_windows: Vec<Arc<Window>>,
     scroll_discrete_pending: bool,
 }
 
@@ -198,6 +199,52 @@ impl Window {
 
         layer_surface.set_anchor(anchor);
         layer_surface.set_size(width, height);
+        layer_surface.set_exclusive_zone(-1);
+        layer_surface.set_margin(0, 0, 0, 0);
+        surface.set_input_region(None);
+        surface.commit();
+        Window {
+            pos,
+            buffer,
+            surface,
+            layer_surface,
+        }
+    }
+
+    fn new_fullscreen(
+        state: &State,
+        qh: &QueueHandle<State>,
+        output: &WlOutput,
+        pos: Position,
+        size: (i32, i32),
+    ) -> Window {
+        let (width, height) = (size.0 as u32, size.1 as u32);
+        let mut file = tempfile::tempfile().unwrap();
+        draw(&mut file, (width, height));
+        let g = &state.globals;
+        let pool = g
+            .shm
+            .create_pool(file.as_fd(), (width * height * 4) as i32, qh, ());
+        let buffer = pool.create_buffer(
+            0,
+            width as i32,
+            height as i32,
+            (width * 4) as i32,
+            wl_shm::Format::Argb8888,
+            qh,
+            (),
+        );
+        let surface = g.compositor.create_surface(qh, ());
+        let layer_surface = g.layer_shell.get_layer_surface(
+            &surface,
+            Some(output),
+            Layer::Overlay,
+            "LAN Mouse Sharing Transfer".into(),
+            qh,
+            (),
+        );
+        layer_surface.set_anchor(Anchor::Top | Anchor::Bottom | Anchor::Left | Anchor::Right);
+        layer_surface.set_size(0, 0);
         layer_surface.set_exclusive_zone(-1);
         layer_surface.set_margin(0, 0, 0, 0);
         surface.set_input_region(None);
@@ -334,6 +381,7 @@ impl LayerShellInputCapture {
             read_guard: None,
             pending_events: VecDeque::new(),
             outputs: vec![],
+            forced_windows: Vec::new(),
             scroll_discrete_pending: false,
         };
 
@@ -474,6 +522,50 @@ impl State {
         }
     }
 
+    fn force_grab(&mut self, pos: Position) {
+        if self.forced_windows.is_empty() {
+            let outputs = self
+                .outputs
+                .iter()
+                .filter_map(|output| {
+                    output
+                        .info
+                        .as_ref()
+                        .map(|info| (output.wl_output.clone(), info.size))
+                })
+                .collect::<Vec<_>>();
+            for (output, size) in outputs {
+                let window = Arc::new(Window::new_fullscreen(self, &self.qh, &output, pos, size));
+                self.active_windows.push(window.clone());
+                self.forced_windows.push(window);
+            }
+        }
+        let Some(window) = self.forced_windows.first().cloned() else {
+            log::warn!("cannot activate capture at {pos}: no configured output");
+            return;
+        };
+        self.focused = Some(window.clone());
+        window
+            .layer_surface
+            .set_keyboard_interactivity(KeyboardInteractivity::Exclusive);
+        window.surface.commit();
+
+        // The pointer is not necessarily over the first forced surface yet.
+        // Let its eventual wl_pointer::Enter event call `grab()` with the
+        // correct surface and serial; requesting a lock here could bind it to
+        // the wrong output and leave mouse motion local.
+        if let Some(shortcut_inhibit_manager) = &self.globals.shortcut_inhibit_manager {
+            if self.shortcut_inhibitor.is_none() {
+                self.shortcut_inhibitor = Some(shortcut_inhibit_manager.inhibit_shortcuts(
+                    &window.surface,
+                    &self.globals.seat,
+                    &self.qh,
+                    (),
+                ));
+            }
+        }
+    }
+
     fn ungrab(&mut self) {
         // get focused client
         let window = match self.focused.as_ref() {
@@ -504,6 +596,14 @@ impl State {
             shortcut_inhibitor.destroy();
             self.shortcut_inhibitor = None;
         }
+
+        self.active_windows.retain(|window| {
+            !self
+                .forced_windows
+                .iter()
+                .any(|forced| Arc::ptr_eq(forced, window))
+        });
+        self.forced_windows.clear();
     }
 
     fn add_client(&mut self, pos: Position) {
@@ -537,6 +637,7 @@ impl State {
         }
 
         self.active_windows.clear();
+        self.forced_windows.clear();
 
         let active_positions = self.active_positions.iter().cloned().collect::<Vec<_>>();
         for pos in active_positions {
@@ -624,6 +725,12 @@ impl Capture for LayerShellInputCapture {
         log::debug!("releasing pointer");
         let inner = self.0.get_mut();
         inner.state.ungrab();
+        Ok(inner.flush_events()?)
+    }
+
+    fn activate(&mut self, pos: Position) -> Result<(), CaptureError> {
+        let inner = self.0.get_mut();
+        inner.state.force_grab(pos);
         Ok(inner.flush_events()?)
     }
 

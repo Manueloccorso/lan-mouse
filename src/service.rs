@@ -94,7 +94,7 @@ impl Service {
         // listener + connection
         let listener =
             LanMouseListener::new(config.port(), cert.clone(), authorized_keys.clone()).await?;
-        let conn = LanMouseConnection::new(cert.clone(), client_manager.clone());
+        let conn = LanMouseConnection::new(cert.clone(), client_manager.clone(), listener.sender());
 
         // input capture + emulation
         let capture_backend = config.capture_backend().map(|b| b.into());
@@ -223,15 +223,22 @@ impl Service {
     }
 
     fn transfer_to_position(&mut self, pos: Position) {
-        let Some(handle) = self.client_manager.client_at(pos) else {
-            self.notify_frontend(FrontendEvent::Error(format!("no active client at {pos}")));
-            return;
-        };
         if self.capture_status != Status::Enabled {
             self.notify_frontend(FrontendEvent::Error("input capture is disabled".to_owned()));
             return;
         }
-        self.capture.transfer(handle);
+        if let Some(handle) = self.client_manager.client_at(pos) {
+            self.capture.transfer(handle);
+        } else if let Some((handle, _incoming)) = self
+            .incoming_conn_info
+            .iter()
+            .find(|(_, incoming)| incoming.pos == pos)
+        {
+            self.capture.transfer(*handle);
+        } else {
+            self.notify_frontend(FrontendEvent::Error(format!("no active client at {pos}")));
+            return;
+        }
         self.notify_frontend(FrontendEvent::TransferStarted(pos));
     }
 
@@ -419,6 +426,7 @@ impl Service {
         let handle = Self::ENTER_HANDLE_BEGIN + self.next_trigger_handle;
         self.next_trigger_handle += 1;
         self.capture.create(handle, pos, CaptureType::EnterOnly);
+        self.capture.register_incoming(handle, addr, pos);
         self.incoming_conns.insert(addr);
         self.incoming_conn_info.insert(
             handle,
@@ -465,6 +473,7 @@ impl Service {
             .find(|(_, incoming)| incoming.addr == addr)
             .map(|(k, _)| *k)?;
         self.capture.destroy(handle);
+        self.capture.unregister_incoming(handle);
         self.incoming_conns.remove(&addr);
         self.incoming_conn_info
             .remove(&handle)
